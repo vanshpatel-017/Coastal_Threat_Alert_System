@@ -19,7 +19,7 @@ function App() {
           <Route path="/alertform" element={<AlertForm />} />
           <Route path="/floodform" element={<FloodForm />} />
           <Route path="/predicted" element={<Predicted />} />
-          <Route path="/cyclonepredictor" element={<CyclonePredictor />} />
+          <Route path="/dashboard/cyclonepredictor" element={<CyclonePredictor />} />
           <Route
             path="/dashboard"
             element={
@@ -36,6 +36,13 @@ function App() {
               </ProtectedRoute>
             }
           />
+          {/* <Route
+            path="/cyclonepredictor"
+            element={
+              <CyclonePredictor />
+            }
+          /> */}
+          
         </Routes>
       </AuthProvider>
     </BrowserRouter>
