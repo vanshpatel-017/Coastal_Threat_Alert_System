@@ -6,7 +6,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const { getReportsByCity, exportReportsCSV, exportReportsPDF } = require("./controllers/reportController");
 const userRouter = require('./routes/userRoutes');
 const alertRoutes = require('./routes/alert');
-
+const predict = require('./routes/predict')
 const app = express();
 
 // Middleware
@@ -24,6 +24,7 @@ app.get("/search", getReportsByCity);
 app.get("/export/csv", exportReportsCSV);
 app.get("/export/pdf", exportReportsPDF);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/predict", predict);
 
 
 // MongoDB Connection

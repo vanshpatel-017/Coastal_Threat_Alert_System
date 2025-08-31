@@ -5,6 +5,9 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AlertForm from "./pages/AlertForm";
+import FloodForm from "./components/FloodForm";
+import Predicted from "./components/Predicted";
+import CyclonePredictor from "./components/CyclonePredictor";
 
 function App() {
   return (
@@ -14,6 +17,9 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/alertform" element={<AlertForm />} />
+          <Route path="/floodform" element={<FloodForm />} />
+          <Route path="/predicted" element={<Predicted />} />
+          <Route path="/cyclonepredictor" element={<CyclonePredictor />} />
           <Route
             path="/dashboard"
             element={

@@ -4,7 +4,7 @@ import axios from "../utils/axiosInstance";
 import { useNavigate } from "react-router-dom";
 import AlertForm from "./AlertForm";
 import WeatherMap from "../components/WeatherMap";
-import Alert from '@mui/material/Alert';
+import Predicted from "../components/Predicted";
 
 export default function Dashboard() {
   const { logout } = useContext(AuthContext);
@@ -14,7 +14,6 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [city, setCity] = useState("");
   const [loading, setLoading] = useState(false);
-  const [reports, setReports] = useState([]);
   const [user, setUser] = useState(null);
   const [isAlertFormOpen, setIsAlertFormOpen] = useState(false);
   const [alertHistory, setAlertHistory] = useState([]);
@@ -35,6 +34,7 @@ export default function Dashboard() {
             const { latitude, longitude } = position.coords;
             try {
               const apiKey = import.meta.env.VITE_OPEN_WEATHER_API_KEY;
+              console.log("API Key (geolocation):", apiKey);
               if (!apiKey) {
                 throw new Error("OpenWeatherMap API key is missing");
               }
@@ -42,44 +42,87 @@ export default function Dashboard() {
                 `https://api.openweathermap.org/geo/1.0/reverse?lat=${latitude}&lon=${longitude}&limit=1&appid=${apiKey}`
               );
               const cityName = response.data[0]?.city || response.data[0]?.name || "";
-              if (cityName) {
+              console.log("Geolocation city:", cityName);
+              if (cityName && !["SabarmatiTaluka", "Asarva Taluka"].includes(cityName)) {
                 setCity(cityName);
-                fetchMetrics(cityName);
+                fetchMetrics(cityName, latitude, longitude);
               } else {
-                setCity("Ahmedabad");
-                fetchMetrics("Ahmedabad");
+                setCity("Chennai");
+                fetchMetrics("Chennai");
               }
             } catch (err) {
-              console.error("Error getting city from coordinates:", err);
-              setCity("Ahmedabad");
-              fetchMetrics("Ahmedabad");
+              console.error("Error getting city from coordinates:", err.message, err.response?.data);
+              setCity("Chennai");
+              fetchMetrics("Chennai");
             }
           },
           (error) => {
-            console.error("Geolocation error:", error);
-            setCity("Ahmedabad");
-            fetchMetrics("Ahmedabad");
+            console.error("Geolocation error:", error.message);
+            setCity("Chennai");
+            fetchMetrics("Chennai");
           }
         );
       } else {
-        setCity("Ahmedabad");
-        fetchMetrics("Ahmedabad");
+        console.log("Geolocation not supported");
+        setCity("Chennai");
+        fetchMetrics("Chennai");
       }
     };
     getDefaultCity();
   }, []);
 
-  
+  // Fetch alerts from backend
+  useEffect(() => {
+    axios.get("/api/alerts")
+      .then(res => {
+        setAlerts(res.data);
+        setAlertHistory(res.data);
+      })
+      .catch(err => console.error("Error fetching alerts:", err));
+  }, []);
 
-  // Fetch weather metrics
-  const fetchMetrics = async (cityName) => {
+  // Mock notifications
+  useEffect(() => {
+    setNotifications([
+      {
+        id: 1,
+        type: "subscription",
+        title: "Alert Subscription",
+        time: "10:42 AM",
+        description: "Fisherfolk community subscribed to storm alerts",
+      },
+    ]);
+  }, []);
+
+  // Fetch weather metrics and coordinates
+  const fetchMetrics = async (cityName, userLat = null, userLon = null) => {
     if (!cityName) return;
+    console.log("Fetching metrics for city:", cityName);
     setLoading(true);
     try {
       const apiKey = import.meta.env.VITE_OPEN_WEATHER_API_KEY;
+      console.log("API Key (fetchMetrics):", apiKey);
       if (!apiKey) {
-        throw new Error("OpenWeatherMap API key is missing");
+        throw new Error("OpenWeatherMap API key is missing. Please set VITE_OPEN_WEATHER_API_KEY in .env");
       }
+
+      // Fetch coordinates for the city if not provided (from geolocation)
+      let latitude, longitude;
+      if (userLat && userLon) {
+        latitude = userLat;
+        longitude = userLon;
+      } else {
+        const geoRes = await axios.get(
+          `https://api.openweathermap.org/geo/1.0/direct?q=${cityName}&limit=1&appid=${apiKey}`
+        );
+        if (!geoRes.data[0]) {
+          throw new Error("City not found");
+        }
+        latitude = geoRes.data[0].lat;
+        longitude = geoRes.data[0].lon;
+      }
+
+      // Fetch weather data
       const weatherRes = await axios.get(
         `https://api.openweathermap.org/data/2.5/weather`,
         {
@@ -91,13 +134,16 @@ export default function Dashboard() {
         }
       );
       const weather = weatherRes.data;
-      let seaLevel = "N/A";
+
+      // Fetch sea level data
+      let seaLevel = 0;
       try {
-        const seaLevelRes = await axios.get("/api/data/sea-level");
+        const seaLevelRes = await axios.get(`/data/sea-level?city=${cityName}`);
         seaLevel = seaLevelRes.data?.data?.[0]?.v || 0;
       } catch (err) {
-        console.error("Sea level API error:", err);
+        console.error("Sea level API error:", err.message, err.response?.data);
       }
+
       setMetrics({
         temp: weather.main.temp,
         humidity: weather.main.humidity,
@@ -105,10 +151,22 @@ export default function Dashboard() {
         windSpeed: weather.wind.speed,
         windDirection: weather.wind.deg,
         rain: weather.rain ? weather.rain["1h"] : 0,
-        seaLevel: weather.main.sea_level || seaLevel,
+        seaLevel,
+        elevation: seaLevel > 0 ? seaLevel * 1000 : 100, // Mock elevation
+        latitude,
+        longitude,
       });
     } catch (err) {
-      console.error("Error fetching metrics:", err);
+      console.error("Error fetching metrics:", err.message, err.response?.data);
+      let errorMessage = "City not found or API error";
+      if (err.response?.status === 401) {
+        errorMessage = "Invalid API key. Please check VITE_OPEN_WEATHER_API_KEY in .env";
+      } else if (err.response?.status === 404) {
+        errorMessage = `City "${cityName}" not found. Try a nearby city like Chennai or Mumbai`;
+      } else if (err.response?.status === 429) {
+        errorMessage = "API rate limit exceeded. Please try again later";
+      }
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -123,6 +181,35 @@ export default function Dashboard() {
     await fetchMetrics(city.trim());
   };
 
+  // Handle new alert from Predicted component
+  const addAlert = (newAlert) => {
+    setAlerts(prev => [newAlert, ...prev]);
+    setAlertHistory(prev => [newAlert, ...prev]);
+  };
+
+  // Handle alert form submission
+  const handleAlertSubmit = async (newAlert) => {
+    try {
+      // Add coordinates to the alert
+      const apiKey = import.meta.env.VITE_OPEN_WEATHER_API_KEY;
+      const geoRes = await axios.get(
+        `https://api.openweathermap.org/geo/1.0/direct?q=${newAlert.location}&limit=1&appid=${apiKey}`
+      );
+      if (geoRes.data[0]) {
+        newAlert.latitude = geoRes.data[0].lat;
+        newAlert.longitude = geoRes.data[0].lon;
+      }
+      const res = await axios.post("/api/alerts", newAlert);
+      const savedAlert = res.data;
+      setAlerts((prev) => [savedAlert, ...prev]);
+      setAlertHistory((prev) => [savedAlert, ...prev]);
+      setIsAlertFormOpen(false);
+    } catch (err) {
+      console.error("Error creating alert:", err);
+      alert("Failed to create alert. Please try again.");
+    }
+  };
+
   // Handle logout
   const handleLogout = async () => {
     try {
@@ -135,29 +222,6 @@ export default function Dashboard() {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    axios.get("/alerts")
-      .then(res => setAlerts(res.data))
-      .catch(err => console.error("Error fetching alerts:", err));
-  }, []);
-
-  // Handle alert form submission
-const handleAlertSubmit = async (newAlert) => {
-  try {
-    const res = await axios.post("/alerts", newAlert);
-    const savedAlert = res.data.alert;
-
-    setAlerts((prev) => [savedAlert, ...prev]); // Add to active alerts
-    setAlertHistory((prev) => [savedAlert, ...prev]); // Add to history
-    setIsAlertFormOpen(false);
-  } catch (err) {
-    console.error("Error creating alert:", err);
-    alert("Failed to create alert. Please try again.");
-  }
-};
-
-
 
   // Get alert color based on level
   const getAlertColor = (level) => {
@@ -186,8 +250,6 @@ const handleAlertSubmit = async (newAlert) => {
         <h2 className="text-3xl font-bold text-gray-800 font-poppins">Coastal Monitoring Dashboard</h2>
         <p className="text-lg text-gray-600 font-poppins">Real-time monitoring of coastal threats and environmental metrics</p>
       </div>
-
-      {/* Alert Summary */}
       <div className="bg-white rounded-xl shadow-md p-6">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-bold text-gray-800 font-poppins">Current Threat Alerts</h3>
@@ -197,8 +259,8 @@ const handleAlertSubmit = async (newAlert) => {
         </div>
         <div className="space-y-4">
           {alerts.map(alert => (
-            <div 
-              key={alert.id} 
+            <div
+              key={alert.id}
               className={`flex items-start p-4 border rounded-lg bg-${getAlertColor(alert.level)}-50 border-${getAlertColor(alert.level)}-200`}
             >
               <div className={`flex-shrink-0 text-${getAlertColor(alert.level)}-600 text-xl mr-3`}>
@@ -208,7 +270,7 @@ const handleAlertSubmit = async (newAlert) => {
                 <h4 className={`font-bold text-${getAlertColor(alert.level)}-700 text-lg font-poppins`}>{alert.title}</h4>
                 <p className="text-base text-gray-600 font-poppins">{alert.description}</p>
                 <div className="flex items-center mt-2 text-sm text-gray-500 font-poppins">
-                  <span><i className="fas fa-clock mr-1"></i> Updated {alert.time}</span>
+                  <span><i className="fas fa-clock mr-1"></i> Updated {alert.time || new Date(alert.sentAt).toLocaleString()}</span>
                   <span className="mx-2">•</span>
                   <span><i className="fas fa-map-marker-alt mr-1"></i> {alert.location}</span>
                 </div>
@@ -217,8 +279,6 @@ const handleAlertSubmit = async (newAlert) => {
           ))}
         </div>
       </div>
-
-      {/* Environmental Metrics */}
       <div className="bg-white rounded-xl shadow-md p-6">
         <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Environmental Metrics</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -234,7 +294,6 @@ const handleAlertSubmit = async (newAlert) => {
             </div>
             <p className="text-sm mt-2 text-green-600 font-poppins"><i className="fas fa-arrow-up"></i> 1.2°C from yesterday</p>
           </div>
-          
           <div className="bg-green-50 p-4 rounded-lg border border-green-200">
             <div className="flex items-center">
               <div className="rounded-full bg-green-100 p-3 mr-4">
@@ -247,11 +306,10 @@ const handleAlertSubmit = async (newAlert) => {
             </div>
             <p className="text-sm mt-2 text-red-600 font-poppins"><i className="fas fa-arrow-up"></i> 0.08m from average</p>
           </div>
-          
           <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
             <div className="flex items-center">
               <div className="rounded-full bg-purple-100 p-3 mr-4">
-                <i className="fas fa-wind text-purple-600 text-xl"></i>
+                <i className="fas fa-wind text-blue-600 text-xl"></i>
               </div>
               <div>
                 <p className="text-base text-gray-600 font-poppins">Wind Speed</p>
@@ -262,20 +320,10 @@ const handleAlertSubmit = async (newAlert) => {
           </div>
         </div>
       </div>
-
-      {/* Map Visualization */}
       <div className="bg-white rounded-xl shadow-md p-6">
         <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Coastal Threat Map</h3>
-        <div className="bg-gradient-to-br from-blue-100 to-blue-300 h-64 rounded-lg flex items-center justify-center">
-          <div className="text-center text-blue-700">
-            <i className="fas fa-map-marked-alt text-4xl mb-2"></i>
-            <p className="text-lg font-poppins">Interactive threat visualization map</p>
-            <p className="text-sm font-poppins">(Would show real-time sensor data and threat locations)</p>
-          </div>
-        </div>
+        <WeatherMap alerts={alerts} center={[metrics.latitude || 13.0827, metrics.longitude || 80.2707]} />
       </div>
-
-      {/* Notification Center */}
       <div className="bg-white rounded-xl shadow-md p-6">
         <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Notification Center</h3>
         <div className="space-y-4">
@@ -308,58 +356,42 @@ const handleAlertSubmit = async (newAlert) => {
           <i className="fas fa-plus mr-2"></i> Create New Alert
         </button>
       </div>
-      
+      <div className="bg-white rounded-xl shadow-md p-6">
+        <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Flood Risk Prediction</h3>
+        <Predicted addAlert={addAlert} city={city} setCity={setCity} metrics={metrics} />
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {alerts.map(alert => (
-          <div 
-            key={alert.id} 
-            className={`bg-white rounded-xl shadow-md p-5 border-l-4 border-${getAlertColor(alert.level)}-500`}
-          >
-            <div className="flex justify-between items-start mb-3">
-              <div className={`text-${getAlertColor(alert.level)}-500 text-xl`}>
-                <i className={`fas ${getAlertIcon(alert.type)}`}></i>
-              </div>
-             <span className={`bg-${getAlertColor(alert.severity)}-100 text-${getAlertColor(alert.severity)}-800 text-xs px-2.5 py-0.5 rounded-full font-poppins`}>
-  {alert?.severity?.toUpperCase()}
-</span>
-
-            </div>
-            <h3 className="font-bold text-gray-800 text-lg mb-2 font-poppins">{alert.title}</h3>
-            <p className="text-gray-600 text-base mb-4 font-poppins">{alert.description}</p>
-            <div className="flex justify-between items-center text-sm text-gray-500 font-poppins">
-              <span><i className="fas fa-map-marker-alt mr-1"></i> {alert.location}</span>
-              <span><i className="fas fa-clock mr-1"></i> {alert.time}</span>
-            </div>
+          <div key={alert._id || alert.id} className="bg-white rounded-xl shadow-md p-5 border-l-4 border-blue-500">
+            <h3 className="font-bold text-gray-800">{alert.title}</h3>
+            <p className="text-gray-600">{alert.description}</p>
+            <p className="text-xs text-gray-500">{new Date(alert.sentAt).toLocaleString()}</p>
           </div>
         ))}
-        {/* Alert History Section */}
-<div className="mt-8">
-  <h3 className="text-lg font-bold text-gray-800 mb-4">Alert History</h3>
-  <div className="space-y-3 max-h-64 overflow-y-auto">
-    {alertHistory.length === 0 ? (
-      <p className="text-sm text-gray-500">No past alerts yet.</p>
-    ) : (
-      alertHistory.map(alert => (
-        <div
-          key={alert.id}
-          className="p-4 bg-gray-50 border rounded-lg shadow-sm"
-        >
-          <div className="flex justify-between">
-            <h4 className="font-semibold text-gray-800">{alert.title}</h4>
-            <span className="text-xs text-gray-500">{alert.time}</span>
-          </div>
-          <p className="text-sm text-gray-600">{alert.description}</p>
-          <div className="text-xs text-gray-500 mt-1">
-            <i className="fas fa-map-marker-alt mr-1"></i> {alert.location}
-          </div>
-        </div>
-      ))
-    )}
-  </div>
-</div>
-
       </div>
-      
+      <div className="mt-8">
+        <h3 className="text-lg font-bold text-gray-800 mb-4 font-poppins">📜 Alert History</h3>
+        <div className="space-y-3 max-h-64 overflow-y-auto">
+          {alertHistory.length === 0 ? (
+            <p className="text-sm text-gray-500">No past alerts yet.</p>
+          ) : (
+            alertHistory.map(alert => (
+              <div key={alert._id || alert.id} className="p-4 bg-gray-50 border rounded-lg shadow-sm">
+                <div className="flex justify-between">
+                  <h4 className="font-semibold text-gray-800">{alert.title}</h4>
+                  <span className="text-xs text-gray-500">
+                    {new Date(alert.sentAt).toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600">{alert.description}</p>
+                <div className="text-xs text-gray-500 mt-1">
+                  <i className="fas fa-map-marker-alt mr-1"></i> {alert.location}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
       {isAlertFormOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-lg w-full max-w-md">
@@ -376,7 +408,6 @@ const handleAlertSubmit = async (newAlert) => {
   const renderMetrics = () => (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold text-gray-800 font-poppins">Environmental Metrics</h2>
-      
       <div className="bg-white rounded-xl shadow-md p-6">
         <div className="flex flex-col md:flex-row md:items-center space-y-4 md:space-y-0 md:space-x-4 mb-6">
           <input
@@ -403,7 +434,6 @@ const handleAlertSubmit = async (newAlert) => {
             )}
           </button>
         </div>
-        
         {metrics.temp && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-5 rounded-xl border border-blue-200">
@@ -418,7 +448,6 @@ const handleAlertSubmit = async (newAlert) => {
               </div>
               <p className="text-xs text-green-600 font-poppins"><i className="fas fa-arrow-up"></i> 1.2°C from yesterday</p>
             </div>
-            
             <div className="bg-gradient-to-br from-green-50 to-green-100 p-5 rounded-xl border border-green-200">
               <div className="flex items-center mb-3">
                 <div className="rounded-full bg-green-100 p-3 mr-4">
@@ -431,11 +460,10 @@ const handleAlertSubmit = async (newAlert) => {
               </div>
               <p className="text-xs text-gray-600 font-poppins">Ideal range: 40-60%</p>
             </div>
-            
             <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-5 rounded-xl border border-purple-200">
               <div className="flex items-center mb-3">
                 <div className="rounded-full bg-purple-100 p-3 mr-4">
-                  <i className="fas fa-wind text-purple-600 text-xl"></i>
+                  <i className="fas fa-wind text-blue-600 text-xl"></i>
                 </div>
                 <div>
                   <p className="text-base text-gray-600 font-poppins">Wind Speed</p>
@@ -444,7 +472,6 @@ const handleAlertSubmit = async (newAlert) => {
               </div>
               <p className="text-xs text-gray-600 font-poppins">Direction: {metrics.windDirection}°</p>
             </div>
-            
             <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 p-5 rounded-xl border border-yellow-200">
               <div className="flex items-center mb-3">
                 <div className="rounded-full bg-yellow-100 p-3 mr-4">
@@ -457,7 +484,6 @@ const handleAlertSubmit = async (newAlert) => {
               </div>
               <p className="text-xs text-gray-600 font-poppins">Normal range: 1013 hPa</p>
             </div>
-            
             <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-5 rounded-xl border border-indigo-200">
               <div className="flex items-center mb-3">
                 <div className="rounded-full bg-indigo-100 p-3 mr-4">
@@ -470,7 +496,6 @@ const handleAlertSubmit = async (newAlert) => {
               </div>
               <p className="text-xs text-gray-600 font-poppins">Precipitation level</p>
             </div>
-            
             <div className="bg-gradient-to-br from-teal-50 to-teal-100 p-5 rounded-xl border border-teal-200">
               <div className="flex items-center mb-3">
                 <div className="rounded-full bg-teal-100 p-3 mr-4">
@@ -492,11 +517,9 @@ const handleAlertSubmit = async (newAlert) => {
   const renderMaps = () => (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold text-gray-800 font-poppins">Coastal Threat Map</h2>
-
       <div className="bg-white rounded-xl shadow-md p-6">
-        <WeatherMap alerts={alerts} />
+        <WeatherMap alerts={alerts} center={[metrics.latitude || 13.0827, metrics.longitude || 80.2707]} />
       </div>
-      
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl shadow-md p-6">
           <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Threat Distribution</h3>
@@ -524,7 +547,6 @@ const handleAlertSubmit = async (newAlert) => {
             </div>
           </div>
         </div>
-        
         <div className="bg-white rounded-xl shadow-md p-6">
           <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Recent Incidents</h3>
           <div className="space-y-3">
@@ -564,7 +586,6 @@ const handleAlertSubmit = async (newAlert) => {
   const renderReports = () => (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold text-gray-800 font-poppins">Reports & Analytics</h2>
-      
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl shadow-md p-6">
           <div className="flex items-center justify-between mb-4">
@@ -578,7 +599,6 @@ const handleAlertSubmit = async (newAlert) => {
             Generate Report
           </button>
         </div>
-        
         <div className="bg-white rounded-xl shadow-md p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-gray-800 text-lg font-poppins">Environmental Data</h3>
@@ -591,7 +611,6 @@ const handleAlertSubmit = async (newAlert) => {
             Export Data
           </button>
         </div>
-        
         <div className="bg-white rounded-xl shadow-md p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-gray-800 text-lg font-poppins">Alert History</h3>
@@ -605,7 +624,6 @@ const handleAlertSubmit = async (newAlert) => {
           </button>
         </div>
       </div>
-      
       <div className="bg-white rounded-xl shadow-md p-6">
         <h3 className="text-xl font-bold text-gray-800 mb-4 font-poppins">Monthly Incident Trends</h3>
         <div className="bg-gray-100 h-64 rounded-lg flex items-center justify-center">
@@ -621,7 +639,6 @@ const handleAlertSubmit = async (newAlert) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 flex flex-col font-poppins">
-      {/* Header */}
       <header className="bg-gradient-to-r from-blue-800 to-cyan-700 text-white shadow-lg">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-3">
@@ -636,7 +653,7 @@ const handleAlertSubmit = async (newAlert) => {
           <div className="flex items-center space-x-4">
             <div className="hidden text-blue-600 font-semibold md:flex items-center space-x-2 bg-white bg-opacity-20 px-4 py-2 rounded-full">
               <i className="fas fa-user-circle"></i>
-              <span className="text-base">Welcome, {user?.name}</span>
+              <span className="text-base">Welcome, `{user?.name}`</span>
             </div>
             <button
               className="bg-white text-blue-600 font-semibold bg-opacity-20 hover:bg-opacity-30 px-4 py-2 rounded-md flex items-center transition-all text-base"
@@ -648,8 +665,6 @@ const handleAlertSubmit = async (newAlert) => {
           </div>
         </div>
       </header>
-
-      {/* Navigation Tabs */}
       <div className="bg-white shadow-sm sticky top-0 z-10">
         <div className="container mx-auto px-4">
           <div className="flex space-x-1">
@@ -672,8 +687,6 @@ const handleAlertSubmit = async (newAlert) => {
           </div>
         </div>
       </div>
-
-      {/* Main Content */}
       <main className="flex-1 container mx-auto px-4 py-6">
         {activeTab === "overview" && renderOverview()}
         {activeTab === "alerts" && renderAlerts()}
@@ -681,19 +694,13 @@ const handleAlertSubmit = async (newAlert) => {
         {activeTab === "maps" && renderMaps()}
         {activeTab === "reports" && renderReports()}
       </main>
-
-      {/* Footer */}
       <footer className="bg-gradient-to-r from-blue-800 to-cyan-700 text-white py-4 mt-auto">
         <div className="container mx-auto px-4 text-center">
           <p className="text-base">Coastal Threat Alert System © 2023 | Protecting coastal ecosystems and communities</p>
           <p className="mt-1 text-blue-200 text-sm">Data updates every 15 minutes | System status: <span className="text-green-300">Operational</span></p>
         </div>
       </footer>
-
-      {/* Add Font Awesome */}
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-      
-      {/* Add Poppins font */}
       <style>
         {`
           @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
